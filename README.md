@@ -2,7 +2,7 @@
 
 Scrape the complete Bellhaven website, compare it with all CRM accounts, and review exact changes before applying them. Python 3.10+; no third-party packages.
 
-**The candidate CRM was actually corrected on October 7, 2026.** All 35 website facilities have one current Active account under Bellhaven. There were 25 approved proposals, one deliberately rejected billing-address replacement, six account creates, and 25 updates. Two complete reruns produced zero new proposals and zero writes. See [SUBMISSION.md](SUBMISSION.md).
+**The candidate CRM was corrected on October 7, 2026.** All 35 website facilities have one current Active account under Bellhaven. There were 25 approved proposals, one deliberately rejected billing-address replacement, six account creates, and 25 updates. Complete reruns produced zero new proposals and zero writes. The approach, AI use, and next steps are summarized in [WRITEUP.md](WRITEUP.md). Recorded decisions and 105 passing end-state checks are in [submission/decisions.csv](submission/decisions.csv) and [submission/verification.json](submission/verification.json).
 
 ## Get started
 
@@ -16,9 +16,9 @@ python3 -m bellhaven run
 python3 -m bellhaven serve
 ```
 
-Open http://127.0.0.1:8877. Inspect a proposal, enter your reviewer name and optional rationale, then approve or reject. **Approve and apply makes real changes to the candidate CRM.** Running the pipeline never mutates it. The existing local clone already has `.env` and persistent decisions; preserve its `data/` directory.
+Open http://127.0.0.1:8877. Inspect a proposal, enter your reviewer name and optional rationale, then approve or reject. **Approve and apply makes real changes to the candidate CRM.** Running the pipeline never mutates it. Preserve `data/` across runs; a fresh clone does not contain prior operational decisions.
 
-VS Code tasks, test discovery, extension recommendations, and debugger configurations are included. See [VSCODE_GUIDE.md](VSCODE_GUIDE.md).
+Optional VS Code tasks, test discovery, Python extension recommendations, and debugger configurations are included in `.vscode/`.
 
 ## Commands
 
@@ -88,6 +88,6 @@ The live schema uses `account_id`, `billing_street`, `billing_city`, `billing_st
 
 ## Tests and limits
 
-The offline suite covers address normalization, same-name facilities in other states, homepage-only locations, incomplete-crawl refusal, billing thresholds, stale data, duplicate selection, approval gating, persistent rejection, applied reruns, and lost-response recovery. Live verification checks approved fields, financial and CHOW preservation, original-record retention, absence of unapproved edits, and one current account per website facility.
+The 29 offline tests cover address normalization, same-name facilities in other states, homepage-only locations, incomplete-crawl refusal, malformed CRM pagination, billing thresholds, stale data, duplicate selection, approval gating, persistent rejection, applied reruns, and lost-response recovery. Live verification checks approved fields, financial and CHOW preservation, original-record retention, absence of unapproved edits, and one current account per website facility.
 
 Website absence does not prove closure or current ownership. Alliance, Coldwater, and Sandusky remain Needs Review. The scraper targets this site's HTML and fails loudly if it changes; it does not guess missing data or approve writes automatically.
