@@ -132,10 +132,14 @@ include ignored operational state.
 
 ## Validation and remaining limits
 
-22 offline tests pass. They cover billing thresholds and old-account
+29 offline tests pass. They cover billing thresholds and old-account
 preservation, writes requiring approval, rejected/applied repeat runs, stale
 data, duplicate survivor selection, interrupted writes, homepage-only locations,
-and incomplete-crawl refusal. Live verification separately checked the end state
+and incomplete-crawl refusal. An independent read-only code audit also found
+and prompted fixes for truncated CRM pagination, malformed account IDs, blank
+required website content, and CHOW plans containing reviewed duplicate copies.
+Regression tests now cover these cases and stale duplicate identity evidence.
+Live verification separately checked the end state
 and approved fields. Two complete website/CRM reruns returned zero new proposals
 and zero writes.
 

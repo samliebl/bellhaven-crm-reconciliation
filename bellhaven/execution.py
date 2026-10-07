@@ -17,6 +17,9 @@ def resolved(action, created_id):
 def check_precondition(action, current):
     before = action['before']
     keys = set(action['payload']) | {'parent_id'}
+    keys |= set(before) & {'name','billing_street','billing_city','billing_state','billing_zip','care_type','phone','status','duplicate_of_account','chow_current_account'}
+    if 'duplicate_of_account' in action['payload']:
+        keys |= {'lifetime_revenue','outstanding_ar'}
     if action.get('guard_parent'):
         keys |= {'lifetime_revenue','outstanding_ar'}
     if 'chow_current_account' in action['payload']:
@@ -38,6 +41,7 @@ def execute(conn, proposal_id, crm, lock_path=None):
         actions = json.loads(row['plan'])
         if not actions:
             raise ValueError('This item requires investigation; there is no executable change to approve')
+        reviewed_duplicates = {a['account_id'] for a in actions if a['method']=='PATCH' and a['payload'].get('duplicate_of_account')=='$created_id' and a['payload'].get('status')=='Inactive'}
         conn.execute("UPDATE proposals SET state='applying',error=NULL WHERE id=?",(proposal_id,))
         conn.commit()
         created_id, outcomes = None, []
@@ -80,7 +84,7 @@ def execute(conn, proposal_id, crm, lock_path=None):
                     else:
                         location = json.loads(row['evidence']).get('website')
                         if location:
-                            conflicts = [a for a in live_accounts if identity_score(location,a)[0] >= 88 and str(a['id']) != action.get('chow_old_id') and not a.get('duplicate_of_account') and not a.get('chow_current_account')]
+                            conflicts = [a for a in live_accounts if identity_score(location,a)[0] >= 88 and str(a['id']) != action.get('chow_old_id') and str(a['id']) not in reviewed_duplicates and not a.get('duplicate_of_account') and not a.get('chow_current_account')]
                             if conflicts:
                                 raise RuntimeError('A matching account appeared since review; refresh evidence instead of creating another')
                         # Commit before transmission, so a timeout cannot cause a

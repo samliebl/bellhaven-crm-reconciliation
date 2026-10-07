@@ -111,6 +111,8 @@ def parse_location(html, url):
         raise ValueError(f'Unrecognized address at {url}: {address}')
     badges = [n.text().strip() for n in fields['care offerings'].walk() if 'badge' in n.attrs.get('class', '').split()]
     result = dict(name=headings[0].text().strip(), street=match[1].strip(), city=match[2].strip(), state=match[3], zip=match[4], care_offerings=badges or [fields['care offerings'].text().strip()], source_url=url)
+    if any(not result[key] for key in ('name','street','city')) or any(not offering for offering in result['care_offerings']):
+        raise ValueError(f'Blank required location content at {url}')
     for label in ('phone','administrator'):
         if label in fields:
             result[label] = fields[label].text().strip()
@@ -181,6 +183,7 @@ class CRM:
         return {**value, 'id':value.get('account_id',value.get('id'))}
     def list_accounts(self):
         records, seen = [], set()
+        expected_total = None
         for page in range(1, 1001):
             response = self.call('accounts?' + urllib.parse.urlencode({'page': page, 'page_size': 100}))
             if isinstance(response, list):
@@ -192,15 +195,26 @@ class CRM:
                 raise ValueError('Unknown account list format')
             if items is None:
                 raise ValueError('Account list does not contain a recognized record array')
+            if total is not None:
+                count = int(total)
+                if count < 0 or (expected_total is not None and count != expected_total):
+                    raise ValueError('CRM account total changed during pagination; retry the complete snapshot')
+                expected_total = count
             items = [self.normalize_account(a) for a in items]
+            if any(a['id'] is None or not str(a['id']).strip() for a in items):
+                raise ValueError('CRM account has no id; refusing an incomplete snapshot')
             if not items:
+                if expected_total is not None and len(records) != expected_total:
+                    raise ValueError('CRM pagination ended before the advertised total; refusing incomplete snapshot')
                 return records
             ids = {str(a['id']) for a in items}
-            if ids & seen:
+            if len(ids) != len(items) or ids & seen:
                 raise ValueError('CRM pagination repeated records; refusing incomplete snapshot')
             records.extend(items)
             seen.update(ids)
-            if total is not None and len(records) >= int(total):
+            if expected_total is not None and len(records) > expected_total:
+                raise ValueError('CRM pagination exceeded the advertised total')
+            if expected_total is not None and len(records) == expected_total:
                 return records
         raise ValueError('CRM pagination exceeded safety limit')
 

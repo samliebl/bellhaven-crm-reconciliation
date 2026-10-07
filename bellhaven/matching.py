@@ -184,7 +184,8 @@ def reconcile(conn, snapshot, accounts, parent):
             loser = candidate[2]
             if loser['id'] == winner['id']:
                 continue
-            text = f"Duplicate of account {winner['id']} based on website name/address: {loc['source_url']}. Retained for audit; no merge or deletion."
+            target = f"facility copy linked to the newly created CHOW successor of old account {winner['id']}" if kind == 'chow_required' else f"of account {winner['id']}"
+            text = f"Duplicate {target} based on website name/address: {loc['source_url']}. Retained for audit; no merge or deletion."
             losing_payload = {'status':'Inactive','duplicate_of_account':'$created_id' if kind == 'chow_required' else winner['id'],'note':note_with(loser,text)}
             actions.append(patch_action(loser,losing_payload))
         if len(group) > 1:

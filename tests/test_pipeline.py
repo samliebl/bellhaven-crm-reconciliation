@@ -48,6 +48,23 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(street_key('4850 Northwest Sylvania Avenue'),street_key('4850 NW Sylvania Ave'))
         self.assertEqual(street_key('3313 Wilmington Pk'),street_key('3313 Wilmington Pike'))
     def test_parent_detection(self): self.assertEqual(find_parent([PARENT])['id'],'parent')
+    def test_crm_pagination_collects_advertised_total(self):
+        crm=CRM(token='offline-test')
+        with patch.object(crm,'call',side_effect=[{'data':[account('a')],'total':2},{'data':[account('b')],'total':2}]) as calls:
+            self.assertEqual([a['id'] for a in crm.list_accounts()],['a','b'])
+        self.assertEqual(calls.call_count,2)
+    def test_crm_empty_page_before_total_aborts(self):
+        crm=CRM(token='offline-test')
+        with patch.object(crm,'call',side_effect=[{'data':[account('a')],'total':2},{'data':[],'total':2}]):
+            with self.assertRaisesRegex(ValueError,'before the advertised total'): crm.list_accounts()
+    def test_crm_duplicate_ids_on_one_page_abort(self):
+        crm=CRM(token='offline-test')
+        with patch.object(crm,'call',return_value={'data':[account('a'),account('a')],'total':2}):
+            with self.assertRaisesRegex(ValueError,'repeated records'): crm.list_accounts()
+    def test_crm_missing_id_aborts(self):
+        crm=CRM(token='offline-test')
+        with patch.object(crm,'call',return_value={'data':[{'name':'Missing id'}],'total':1}):
+            with self.assertRaisesRegex(ValueError,'no id'): crm.list_accounts()
     def test_billing_truth_table(self):
         for revenue,ar,expected in [(0,0,False),(100,0,False),(0,20,False),(100,20,True)]:
             self.assertEqual(requires_chow(account(lifetime_revenue=revenue,outstanding_ar=ar)),expected)
@@ -69,6 +86,27 @@ class PipelineTests(unittest.TestCase):
         current=crm.get('a'); successor=current.pop('chow_current_account'); expected=copy.deepcopy(old); expected.pop('chow_current_account')
         self.assertEqual(current,expected); self.assertEqual(crm.get(successor)['parent_id'],'parent')
         self.generate(crm.list_accounts()); self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM proposals').fetchone()[0],1)
+    def test_chow_with_reviewed_duplicate_can_complete(self):
+        old=account('old',parent_id='other',lifetime_revenue=100,outstanding_ar=50)
+        duplicate=account('duplicate')
+        self.generate([PARENT,old,duplicate]); crm=FakeCRM([PARENT,old,duplicate])
+        decide(self.conn,self.proposal()['id'],'approve','Reviewer',crm,self.lock)
+        successor=crm.get('old')['chow_current_account']
+        self.assertEqual(crm.get('old')['parent_id'],'other')
+        self.assertEqual(crm.get('duplicate')['duplicate_of_account'],successor)
+        self.assertEqual(crm.get('duplicate')['status'],'Inactive')
+        self.assertIn('CHOW successor of old account old',crm.get('duplicate')['note'])
+        self.assertEqual(crm.get(successor)['parent_id'],'parent')
+        self.generate(crm.list_accounts())
+        self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM proposals').fetchone()[0],1)
+    def test_duplicate_identity_change_blocks_plan_before_create(self):
+        old=account('old',parent_id='other',lifetime_revenue=100,outstanding_ar=50)
+        duplicate=account('duplicate')
+        self.generate([PARENT,old,duplicate]); crm=FakeCRM([PARENT,old,duplicate])
+        crm.accounts['duplicate']['billing_street']='A different facility'
+        with self.assertRaisesRegex(RuntimeError,'CRM changed since review'):
+            decide(self.conn,self.proposal()['id'],'approve','Reviewer',crm,self.lock)
+        self.assertEqual(crm.writes,[])
     def test_rejected_not_reproposed(self):
         old=account(name='Old name'); self.generate([PARENT,old]); decide(self.conn,self.proposal()['id'],'reject','Test reviewer')
         self.generate([PARENT,old]); self.assertEqual(self.conn.execute('SELECT COUNT(*) FROM proposals').fetchone()[0],1)
@@ -122,6 +160,11 @@ class PipelineTests(unittest.TestCase):
         source='<h1>Example</h1><dl><dt>Address</dt><dd>10 Main St<br>Example, OH 43000</dd><dt>Care Offerings</dt><dd><span class="badge">Assisted Living</span><span class="badge">Memory Support</span></dd></dl>'
         result=parse_location(source,'https://example.test/communities/example')
         self.assertEqual(result['care_offerings'],['Assisted Living','Memory Support']); self.assertEqual(result['city'],'Example')
+    def test_detail_parser_rejects_blank_required_content(self):
+        source='<h1>Example</h1><dl><dt>Address</dt><dd>10 Main St<br>Example, OH 43000</dd><dt>Care Offerings</dt><dd>Assisted Living</dd></dl>'
+        for invalid in (source.replace('<h1>Example</h1>','<h1> </h1>'),source.replace('<dd>Assisted Living</dd>','<dd> </dd>'),source.replace('10 Main St','   ')):
+            with self.subTest(source=invalid):
+                with self.assertRaises(ValueError): parse_location(invalid,'https://example.test/communities/example')
     def test_crawl_includes_homepage_only_location(self):
         base='https://example.test'
         detail='<h1>Example</h1><dl><dt>Address</dt><dd>10 Main St<br>Example, OH 43000</dd><dt>Care Offerings</dt><dd>Assisted Living</dd></dl>'
