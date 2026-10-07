@@ -28,6 +28,17 @@ def esc(value):
 def pretty(value):
     return '<pre>' + esc(json.dumps(value,indent=2)) + '</pre>'
 
+LABELS={'name':'Name','billing_street':'Billing street','billing_city':'City','billing_state':'State','billing_zip':'ZIP','care_type':'Care offerings','status':'Status','parent_id':'Parent company','note':'Note','chow_current_account':'Current account after ownership change','duplicate_of_account':'Duplicate of account','phone':'Phone','lifetime_revenue':'Lifetime revenue','outstanding_ar':'Outstanding AR'}
+
+def crm_evidence(account):
+    body='<table>'
+    for key in ('parent_id','billing_street','billing_city','billing_state','billing_zip','care_type','status','phone','lifetime_revenue','outstanding_ar','chow_current_account','duplicate_of_account','note'):
+        value=account.get(key,'')
+        if key=='parent_id': value=account.get('parent_name') or value or 'No parent assigned'
+        if key in ('lifetime_revenue','outstanding_ar') and isinstance(value,(float,int)): value=f'${value:,.2f}'
+        if value!='': body+=f'<tr><th>{esc(LABELS.get(key,key))}</th><td>{esc(value)}</td></tr>'
+    return body+'</table><details><summary>Full CRM record</summary>'+pretty(account)+'</details>'
+
 def page(title,body):
     return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · Bellhaven Review</title><style>{CSS}</style></head><body><header><a href="/"><strong>Bellhaven / CRM Review</strong></a><p>Website evidence → reviewed decisions → verified CRM changes</p></header><main>{body}</main></body></html>'
 
@@ -71,30 +82,35 @@ def detail(conn,proposal_id,csrf,message=''):
     body+='<div class="cols"><section class="panel"><h2>Website evidence</h2>'
     if loc:
         body+=f'<strong>{esc(loc["name"])}</strong><p>{esc(loc["street"])}<br>{esc(loc["city"])}, {esc(loc["state"])} {esc(loc["zip"])}</p><p>{esc(" · ".join(loc["care_offerings"]))}</p><a href="{esc(loc["source_url"])}" target="_blank" rel="noopener">Open source page ↗</a><p class="muted">Collected {esc(evidence.get("fetched_at"))}</p>'
+        if loc.get('phone'): body+=f'<p>Supporting phone: {esc(loc["phone"])}</p>'
     else:
         body+=f'<p>Absent from the complete crawl of {evidence.get("website_count")} facilities.</p><p class="muted">Collected {esc(evidence.get("fetched_at"))}</p><details><summary>Pages checked</summary>{pretty(evidence.get("pages",[]))}</details>'
     body+='</section><section class="panel"><h2>CRM evidence</h2>'
     candidates=evidence.get('candidates',[])
     if not candidates:
-        body+=pretty(evidence['account']) if evidence.get('account') else '<p>No candidate met the identity threshold in the complete CRM snapshot.</p>'
+        body+=crm_evidence(evidence['account']) if evidence.get('account') else '<p>No candidate met the identity threshold in the complete CRM snapshot.</p>'
     for candidate in candidates:
         account=candidate['account']
-        body+=f'<h3>{esc(account["name"])}</h3><p class="muted">Evidence score {candidate["score"]}/100 · {esc(account["id"])}</p><p>{esc("; ".join(candidate["reasons"]))}</p>{pretty(account)}'
-    body+='</section></div><section class="panel"><h2>Exact approved operations</h2>'
+        body+=f'<h3>{esc(account["name"])}</h3><p class="muted">Evidence score {candidate["score"]}/100 · {esc(account["id"])}</p><p>{esc("; ".join(candidate["reasons"]))}</p>{crm_evidence(account)}'
+    body+='</section></div><section class="panel"><h2>Proposed field changes</h2>'
     if not actions:
         body+='<p>Investigation is required before an executable change can be proposed.</p>'
     for i,action in enumerate(actions,1):
         body+=f'<h3>{i}. {"Create a new account" if action["method"]=="POST" else "Update account "+esc(action["account_id"])}</h3><div class="table-wrap"><table><tr><th>Field</th><th>Before</th><th>After</th></tr>'
         for key,value in action['payload'].items():
-            before=action.get('before',{}).get(key,'— new account —')
+            before=action.get('before',{}).get(key,'— new account —') or '—'
+            if key=='parent_id':
+                if action.get('before'): before=action['before'].get('parent_name') or before
+                if str(value)==str(evidence.get('parent',{}).get('id')): value=evidence['parent']['name']
             if value=='$created_id': value='ID returned by the approved create above'
-            body+=f'<tr><td><code>{esc(key)}</code></td><td>{esc(before)}</td><td><strong>{esc(value)}</strong></td></tr>'
+            body+=f'<tr><td>{esc(LABELS.get(key,key))}</td><td>{esc(before)}</td><td><strong>{esc(value)}</strong></td></tr>'
         body+='</table></div>'
     body+='</section>'
     if row['state']=='pending':
-        body+=f'<form action="/proposal/{proposal_id}/decision" method="post"><input type="hidden" name="csrf" value="{csrf}"><div class="actions"><div><label for="reviewer">Reviewer name</label><input id="reviewer" name="reviewer" required placeholder="Your name"></div><button name="decision" value="approve" {"disabled" if not actions else ""}>Approve and apply</button><button class="secondary" name="decision" value="reject">Reject change</button></div></form><p class="muted">Approval is recorded before execution. Current CRM values and billing facts are checked again, and every operation is read back to verify it.</p>'
+        body+=f'<form action="/proposal/{proposal_id}/decision" method="post"><input type="hidden" name="csrf" value="{csrf}"><div class="actions"><div><label for="reviewer">Reviewer name</label><input id="reviewer" name="reviewer" required placeholder="Your name"></div><div><label for="reason">Decision rationale (optional)</label><input id="reason" name="reason" placeholder="Why this decision is justified"></div><button name="decision" value="approve" {"disabled" if not actions else ""}>Approve and apply</button><button class="secondary" name="decision" value="reject">Reject change</button></div></form><p class="muted">Approval is recorded before execution. Current CRM values and billing facts are checked again, and every operation is read back to verify it.</p>'
     else:
         body+=f'<p>Decision recorded for <strong>{esc(row["reviewer"])}</strong> at {esc(row["decided_at"])}.</p>'
+        if row['decision_reason']: body+=f'<p>Rationale: {esc(row["decision_reason"])}</p>'
         if row['state'] in ('failed','approved','applying'):
             body+=f'<form action="/proposal/{proposal_id}/retry" method="post"><input type="hidden" name="csrf" value="{csrf}"><button>Resume approved change safely</button></form>'
         if row['result']:
@@ -102,7 +118,7 @@ def detail(conn,proposal_id,csrf,message=''):
     body+='<details style="margin-top:24px"><summary>Full evidence and decision fingerprint</summary><code>'+esc(row['fingerprint'])+'</code>'+pretty(evidence)+'</details>'
     return page(row['title'],body)
 
-def serve(port=8765):
+def serve(port=8877):
     csrf=secrets.token_urlsafe(32)
     class Handler(BaseHTTPRequestHandler):
         def respond(self,body,status=200,content_type='text/html; charset=utf-8'):
@@ -148,7 +164,7 @@ def serve(port=8765):
             try:
                 if parts[2]=='decision':
                     decision=form.get('decision',[''])[0]
-                    decide(conn,proposal_id,decision,form.get('reviewer',[''])[0],CRM() if decision=='approve' else None)
+                    decide(conn,proposal_id,decision,form.get('reviewer',[''])[0],CRM() if decision=='approve' else None,reason=form.get('reason',[''])[0])
                 else:
                     execute(conn,proposal_id,CRM())
                 self.send_response(303); self.send_header('Location',f'/proposal/{proposal_id}'); self.end_headers()
@@ -156,5 +172,6 @@ def serve(port=8765):
                 self.respond(detail(conn,proposal_id,csrf,str(exc)) or esc(exc),409)
             finally:
                 conn.close()
+    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
     print(f'Review app: http://127.0.0.1:{port}',flush=True)
-    ThreadingHTTPServer(('127.0.0.1',port),Handler).serve_forever()
+    server.serve_forever()

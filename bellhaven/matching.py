@@ -19,7 +19,7 @@ def identity_score(location, account):
         return 88, ['Exact facility name and city/state; address needs reviewer verification']
     if same_city and same_state and similarity >= .75:
         return 70 + round(similarity * 10), ['Similar name in the same city/state; identity is uncertain']
-    if same_street and (same_zip or same_city):
+    if same_street and same_state and (same_zip or same_city):
         return 75, ['Street agrees with locality, but other identity fields conflict']
     return 0, reasons
 
@@ -88,6 +88,13 @@ def reconcile(conn, snapshot, accounts, parent):
     cursor = conn.execute('INSERT INTO runs(at,snapshot,parent_id) VALUES(?,?,?)', (now(), json.dumps(snapshot), parent_id))
     run_id = cursor.lastrowid
     used, reserved, proposed = set(), set(), []
+    unfinished = {}
+    for row in conn.execute("SELECT evidence,plan FROM proposals WHERE state IN ('approved','applying','failed')"):
+        prior_evidence=json.loads(row['evidence'])
+        source=prior_evidence.get('website',{}).get('source_url')
+        if source:
+            unfinished[source]=prior_evidence
+        reserved.update(str(a['account_id']) for a in json.loads(row['plan']) if a.get('account_id'))
     active = [a for a in accounts if str(a['id']) != parent_id and not a.get('duplicate_of_account') and not a.get('chow_current_account')]
     address_counts = {}
     for loc in snapshot['locations']:
@@ -102,9 +109,14 @@ def reconcile(conn, snapshot, accounts, parent):
             if action['method'] == 'POST':
                 action['payload']['note'] += f'\nReconciliation operation: {fingerprint}'
         conn.execute('INSERT OR IGNORE INTO proposals(fingerprint,run_id,title,kind,plan,evidence) VALUES(?,?,?,?,?,?)', (fingerprint,run_id,title,kind,json.dumps(actions),json.dumps(evidence)))
+        conn.execute("UPDATE proposals SET run_id=?,plan=?,evidence=?,state='pending' WHERE fingerprint=? AND state IN ('pending','superseded')",(run_id,json.dumps(actions),json.dumps(evidence),fingerprint))
         proposed.append(fingerprint)
 
     for loc in snapshot['locations']:
+        if loc['source_url'] in unfinished:
+            reserved.update(str(a['id']) for a in accounts if identity_score(loc,a)[0]>=88)
+            conn.execute('INSERT INTO matches VALUES(?,?,?,?,?)',(run_id,json.dumps(loc),None,'approved_change_needs_recovery',json.dumps(unfinished[loc['source_url']])))
+            continue
         candidates = sorted([(score, str(a['id']), a, reasons) for a in active for score,reasons in [identity_score(loc,a)] if score >= 70], key=lambda x:(-x[0],x[1]))
         evidence = {'website':loc, 'fetched_at':snapshot['fetched_at'], 'candidates':[{'score':s,'account':a,'reasons':r} for s,_,a,r in candidates], 'parent':parent}
         if not candidates:
@@ -116,8 +128,8 @@ def reconcile(conn, snapshot, accounts, parent):
         address_key = (street_key(loc['street']), normalize(loc['city']), normalize(loc['state']))
         strong = [c for c in candidates if c[0] >= 94]
         ambiguous = best_score < 88 or address_counts[address_key] > 1 or any(c[1] in used for c in strong or candidates[:1])
-        # Duplicate claims require precise address identity and sufficiently
-        # similar names; same-address businesses are otherwise left for review.
+        # Duplicate proposals require a precise address, compatible care type,
+        # and only one website facility at that address. Review is mandatory.
         if len(strong) > 1 and len({normalize(c[2].get('care_type')) for c in strong}) > 1:
             ambiguous = True
         if not strong and len(candidates) > 1 and candidates[0][0]-candidates[1][0] < 8:
@@ -137,7 +149,8 @@ def reconcile(conn, snapshot, accounts, parent):
                 revenue,ar = billing_values(a)
             except ValueError:
                 revenue=ar=0
-            return (candidate[1] in chow_targets, ar > 0, revenue > 0, str(a.get('parent_id')) == parent_id, normalize(a.get('name'))==normalize(loc['name']), a.get('status')=='Active', candidate[0], candidate[1])
+            phone_match = bool(loc.get('phone')) and ''.join(filter(str.isdigit,str(a.get('phone','')))) == ''.join(filter(str.isdigit,loc['phone']))
+            return (candidate[1] in chow_targets, ar > 0, revenue > 0, str(a.get('parent_id')) == parent_id, phone_match, normalize(a.get('name'))==normalize(loc['name']), a.get('status')=='Active', candidate[0], candidate[1])
         winner = max(group, key=survivor_rank)[2]
         used.update(c[1] for c in group)
         payload = canonical_payload(loc, winner)
@@ -192,5 +205,10 @@ def reconcile(conn, snapshot, accounts, parent):
         delta = changes(account, {'status':'Needs Review','note':note_with(account,text)})
         if delta:
             add(account.get('name', account_id), 'no_longer_listed', [patch_action(account,delta)], {'account':account,'website_count':len(snapshot['locations']),'directory_count':snapshot['directory_count'],'pages':snapshot['pages'],'fetched_at':snapshot['fetched_at']})
+    placeholders=','.join('?' for _ in proposed)
+    if proposed:
+        conn.execute(f"UPDATE proposals SET state='superseded' WHERE state='pending' AND fingerprint NOT IN ({placeholders})",proposed)
+    else:
+        conn.execute("UPDATE proposals SET state='superseded' WHERE state='pending'")
     conn.commit()
     return run_id

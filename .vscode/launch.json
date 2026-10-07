@@ -1,0 +1,8 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {"name":"Bellhaven: Review app","type":"debugpy","request":"launch","module":"bellhaven","args":["serve","--port","8878"],"cwd":"${workspaceFolder}","console":"integratedTerminal","envFile":"${workspaceFolder}/.env","justMyCode":true},
+    {"name":"Bellhaven: Generate proposals (no CRM writes)","type":"debugpy","request":"launch","module":"bellhaven","args":["run"],"cwd":"${workspaceFolder}","console":"integratedTerminal","envFile":"${workspaceFolder}/.env","justMyCode":true},
+    {"name":"Bellhaven: Debug tests","type":"debugpy","request":"launch","module":"unittest","args":["discover","-s","tests","-v"],"cwd":"${workspaceFolder}","console":"integratedTerminal","justMyCode":true}
+  ]
+}

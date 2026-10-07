@@ -40,8 +40,9 @@ def main():
     sub=parser.add_subparsers(dest='command',required=True)
     scan=sub.add_parser('run'); scan.add_argument('--cached-website',action='store_true')
     sub.add_parser('scrape')
-    web=sub.add_parser('serve'); web.add_argument('--port',type=int,default=8765)
+    web=sub.add_parser('serve'); web.add_argument('--port',type=int,default=8877)
     sub.add_parser('export')
+    sub.add_parser('verify')
     args=parser.parse_args(); load_env()
     if args.command=='run': run(args.cached_website)
     elif args.command=='scrape':
@@ -49,6 +50,16 @@ def main():
     elif args.command=='serve':
         from .app import serve
         serve(args.port)
+    elif args.command=='verify':
+        from .verification import verify
+        accounts=CRM().list_accounts(); conn=database()
+        try:
+            report=verify(conn,accounts,json.loads((ROOT/'data'/'crm-before.json').read_text()),json.loads((ROOT/'data'/'locations.json').read_text()))
+            (ROOT/'data'/'crm-after.json').write_text(json.dumps(accounts,indent=2))
+            (ROOT/'data'/'verification.json').write_text(json.dumps(report,indent=2))
+            print(json.dumps({k:v for k,v in report.items() if k not in ('coverage','checks')},indent=2))
+            if not report['passed']: raise SystemExit('Verification failed; see data/verification.json')
+        finally: conn.close()
     else: export()
 
 if __name__=='__main__': main()

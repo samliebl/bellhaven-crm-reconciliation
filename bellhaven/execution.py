@@ -1,5 +1,6 @@
 import json
 from .core import now, process_lock, requires_chow
+from .matching import identity_score
 
 def equals_payload(account, payload):
     return all(account.get(k) == v for k,v in payload.items())
@@ -66,7 +67,8 @@ def execute(conn, proposal_id, crm, lock_path=None):
                 payload = resolved(action,created_id)
                 if action['method'] == 'POST':
                     marker = 'Reconciliation operation: ' + row['fingerprint']
-                    existing = [a for a in crm.list_accounts() if marker in str(a.get('note') or '')]
+                    live_accounts = crm.list_accounts()
+                    existing = [a for a in live_accounts if marker in str(a.get('note') or '')]
                     if len(existing) > 1:
                         raise RuntimeError('Multiple accounts carry this operation marker; manual investigation required')
                     if existing:
@@ -76,6 +78,11 @@ def execute(conn, proposal_id, crm, lock_path=None):
                     elif operation:
                         raise RuntimeError('Previous create outcome is uncertain. No automatic POST retry; inspect CRM before recovery.')
                     else:
+                        location = json.loads(row['evidence']).get('website')
+                        if location:
+                            conflicts = [a for a in live_accounts if identity_score(location,a)[0] >= 88 and str(a['id']) != action.get('chow_old_id') and not a.get('duplicate_of_account') and not a.get('chow_current_account')]
+                            if conflicts:
+                                raise RuntimeError('A matching account appeared since review; refresh evidence instead of creating another')
                         # Commit before transmission, so a timeout cannot cause a
                         # repeated create on the next run or approval retry.
                         conn.execute('INSERT INTO operations VALUES(?,?,?,?)',(proposal_id,step,'started','{}'))
@@ -116,7 +123,7 @@ def execute(conn, proposal_id, crm, lock_path=None):
             conn.commit()
             raise
 
-def decide(conn, proposal_id, decision, reviewer, crm=None, lock_path=None):
+def decide(conn, proposal_id, decision, reviewer, crm=None, lock_path=None, reason=''):
     if decision not in ('approve','reject') or not reviewer.strip():
         raise ValueError('Provide a valid decision and reviewer')
     row = conn.execute('SELECT * FROM proposals WHERE id=?',(proposal_id,)).fetchone()
@@ -125,7 +132,7 @@ def decide(conn, proposal_id, decision, reviewer, crm=None, lock_path=None):
     if decision == 'approve' and not json.loads(row['plan']):
         raise ValueError('Investigate ambiguous identity/billing data before proposing a concrete change')
     state = 'approved' if decision == 'approve' else 'rejected'
-    changed = conn.execute("UPDATE proposals SET state=?,reviewer=?,decided_at=? WHERE id=? AND state='pending'",(state,reviewer.strip(),now(),proposal_id)).rowcount
+    changed = conn.execute("UPDATE proposals SET state=?,reviewer=?,decided_at=?,decision_reason=? WHERE id=? AND state='pending'",(state,reviewer.strip(),now(),reason.strip(),proposal_id)).rowcount
     conn.commit()
     if changed != 1:
         raise RuntimeError('This proposal was already decided')

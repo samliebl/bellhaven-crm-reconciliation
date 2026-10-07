@@ -22,7 +22,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 def load_env():
-    for path in (ROOT.parents[1] / '.env', ROOT / '.env'):
+    for path in (Path.cwd() / '.env', ROOT / '.env'):
         if path.exists():
             for line in path.read_text().splitlines():
                 if '=' in line and not line.lstrip().startswith('#'):
@@ -110,13 +110,18 @@ def parse_location(html, url):
     if not match:
         raise ValueError(f'Unrecognized address at {url}: {address}')
     badges = [n.text().strip() for n in fields['care offerings'].walk() if 'badge' in n.attrs.get('class', '').split()]
-    return dict(name=headings[0].text().strip(), street=match[1].strip(), city=match[2].strip(), state=match[3], zip=match[4], care_offerings=badges or [fields['care offerings'].text().strip()], source_url=url)
+    result = dict(name=headings[0].text().strip(), street=match[1].strip(), city=match[2].strip(), state=match[3], zip=match[4], care_offerings=badges or [fields['care offerings'].text().strip()], source_url=url)
+    for label in ('phone','administrator'):
+        if label in fields:
+            result[label] = fields[label].text().strip()
+    return result
 
 def scrape(base=BASE, data_dir=None):
     queue = [base + '/', base + '/communities', base + '/about']
     seen, locations, directory_urls = set(), {}, set()
-    declared = set()
-    snapshot = Path(data_dir or ROOT / 'data') / 'website' / now().replace(':', '-')
+    declared, advertised = set(), set()
+    output_dir = Path(data_dir or ROOT / 'data')
+    snapshot = output_dir / 'website' / now().replace(':', '-')
     snapshot.mkdir(parents=True, exist_ok=True)
     while queue:
         url = queue.pop(0)
@@ -133,6 +138,7 @@ def scrape(base=BASE, data_dir=None):
             locations[url] = parse_location(html, url)
         else:
             declared.update(int(n) for n in re.findall(r'(\d+) communities listed', tree.text()))
+            advertised.update(int(n) for n in re.findall(r'serve\s+(\d+)\s+communities',tree.text()))
         for link in tree.find('a'):
             href = urllib.parse.urljoin(url, link.attrs.get('href', ''))
             parsed = urllib.parse.urlparse(href)
@@ -148,8 +154,10 @@ def scrape(base=BASE, data_dir=None):
         raise ValueError(f'Incomplete directory crawl: declared={declared}, discovered={len(directory_urls)}')
     if not locations or any(url not in locations for url in directory_urls):
         raise ValueError('Missing community detail pages; aborting reconciliation')
+    if advertised and len(locations) < max(advertised):
+        raise ValueError(f'Website advertises {max(advertised)} communities, but only {len(locations)} were collected')
     result = {'fetched_at': now(), 'pages': sorted(seen), 'directory_count': len(directory_urls), 'locations': sorted(locations.values(), key=lambda x: x['name']), 'snapshot_dir': str(snapshot)}
-    (ROOT / 'data' / 'locations.json').write_text(json.dumps(result, indent=2))
+    (output_dir / 'locations.json').write_text(json.dumps(result, indent=2))
     return result
 
 class CRM:
@@ -210,6 +218,8 @@ def database(path=None):
         PRIMARY KEY(proposal_id, step));
       CREATE TABLE IF NOT EXISTS matches(run_id INTEGER, location TEXT, account_id TEXT, classification TEXT, evidence TEXT);
     ''')
+    if 'decision_reason' not in {row['name'] for row in conn.execute('PRAGMA table_info(proposals)')}:
+        conn.execute("ALTER TABLE proposals ADD COLUMN decision_reason TEXT DEFAULT ''")
     conn.commit()
     return conn
 

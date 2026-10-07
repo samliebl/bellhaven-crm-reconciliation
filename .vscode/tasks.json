@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"label":"Bellhaven: Run tests","type":"process","command":"python3","args":["-m","unittest","discover","-s","tests","-v"],"options":{"cwd":"${workspaceFolder}"},"group":{"kind":"test","isDefault":true},"problemMatcher":[]},
+    {"label":"Bellhaven: Collect website only","type":"process","command":"python3","args":["-m","bellhaven","scrape"],"options":{"cwd":"${workspaceFolder}"},"problemMatcher":[]},
+    {"label":"Bellhaven: Generate proposals (no CRM writes)","type":"process","command":"python3","args":["-m","bellhaven","run"],"options":{"cwd":"${workspaceFolder}"},"problemMatcher":[]},
+    {"label":"Bellhaven: Start review app","type":"process","command":"python3","args":["-m","bellhaven","serve"],"options":{"cwd":"${workspaceFolder}"},"problemMatcher":[]},
+    {"label":"Bellhaven: Export audit","type":"process","command":"python3","args":["-m","bellhaven","export"],"options":{"cwd":"${workspaceFolder}"},"problemMatcher":[]}
+  ]
+}
