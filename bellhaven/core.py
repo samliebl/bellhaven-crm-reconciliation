@@ -164,8 +164,13 @@ class CRM:
     def get(self, account_id):
         value = self.call('accounts/' + urllib.parse.quote(str(account_id), safe=''))
         if isinstance(value, dict) and isinstance(value.get('account'), dict):
-            return value['account']
-        return value
+            value = value['account']
+        return self.normalize_account(value)
+    @staticmethod
+    def normalize_account(value):
+        if not isinstance(value, dict):
+            raise ValueError('Expected a CRM account object')
+        return {**value, 'id':value.get('account_id',value.get('id'))}
     def list_accounts(self):
         records, seen = [], set()
         for page in range(1, 1001):
@@ -179,6 +184,7 @@ class CRM:
                 raise ValueError('Unknown account list format')
             if items is None:
                 raise ValueError('Account list does not contain a recognized record array')
+            items = [self.normalize_account(a) for a in items]
             if not items:
                 return records
             ids = {str(a['id']) for a in items}
@@ -225,10 +231,12 @@ def normalize(value):
 
 def street_key(value):
     words = normalize(value).split()
-    aliases = {'street':'st', 'road':'rd', 'avenue':'ave', 'drive':'dr', 'lane':'ln', 'boulevard':'blvd', 'court':'ct', 'place':'pl', 'north':'n', 'south':'s', 'east':'e', 'west':'w'}
+    aliases = {'street':'st', 'road':'rd', 'avenue':'ave', 'drive':'dr', 'lane':'ln', 'boulevard':'blvd', 'court':'ct', 'place':'pl', 'north':'n', 'south':'s', 'east':'e', 'west':'w', 'northwest':'nw', 'northeast':'ne', 'southwest':'sw', 'southeast':'se', 'pk':'pike', 'parkway':'pkwy'}
     return ' '.join(aliases.get(w, w) for w in words)
 
 def location_fields(account):
+    if 'billing_street' in account:
+        return {key:account.get('billing_'+key,'') for key in ('street','city','state','zip')}
     address = account.get('address')
     if isinstance(address, dict):
         return {'street': address.get('street', address.get('line1', '')), 'city':address.get('city', ''), 'state':address.get('state', ''), 'zip':address.get('zip', address.get('postal_code', ''))}

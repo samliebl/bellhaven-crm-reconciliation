@@ -1,0 +1,5 @@
+# Example only: NOT installed. Runs at 06:00 America/New_York on cron hosts
+# supporting CRON_TZ. Otherwise configure the host's timezone explicitly.
+# Replace /absolute/path with the persistent checkout location. Preserve data/.
+CRON_TZ=America/New_York
+0 6 * * * cd /absolute/path/bellhaven-crm-reconciliation && /usr/bin/python3 -m bellhaven run >> data/daily.log 2>&1

@@ -30,7 +30,7 @@ def find_parent(accounts):
     else:
         candidates = [a for a in accounts if normalize(a.get('name')) == 'bellhaven senior living' and not a.get('parent_id')]
         if not candidates:
-            candidates = [a for a in accounts if not a.get('parent_id') and normalize(a.get('name')) in ('bellhaven', 'bellhaven senior living parent', 'bellhaven senior living corporate')]
+            candidates = [a for a in accounts if not a.get('parent_id') and normalize(a.get('name')) in ('bellhaven', 'bellhaven senior living parent', 'bellhaven senior living parent account', 'bellhaven senior living corporate')]
     if len(candidates) != 1:
         raise ValueError('Cannot uniquely identify Bellhaven parent. Set CRM_PARENT_ID after reviewing the CRM snapshot.')
     return candidates[0]
@@ -38,7 +38,8 @@ def find_parent(accounts):
 def canonical_payload(location, account=None):
     # The live account schema is inspected before any approvals. Environment
     # overrides support CRM copies using different address/care property names.
-    field_map = json.loads(os.environ.get('CRM_FIELD_MAP', '{}'))
+    field_map = {'street':'billing_street','city':'billing_city','state':'billing_state','zip':'billing_zip','care_offerings':'care_type'}
+    field_map.update(json.loads(os.environ.get('CRM_FIELD_MAP', '{}')))
     payload = {'name': location['name']}
     for key in ('street', 'city', 'state', 'zip', 'care_offerings'):
         target = field_map.get(key, key)
@@ -47,8 +48,11 @@ def canonical_payload(location, account=None):
         if account is not None and key == 'zip' and target not in account and 'postal_code' in account:
             target = 'postal_code'
         value = location[key]
+        if key == 'care_offerings' and target == 'care_type':
+            care_map = {'Short-Term Rehabilitation & Nursing':'Skilled Nursing', 'Memory Support':'Memory Care'}
+            value = '; '.join(care_map.get(c,c) for c in value)
         if key == 'care_offerings' and account is not None and isinstance(account.get(target), str):
-            value = '; '.join(value)
+            value = '; '.join(value) if isinstance(value,list) else value
         payload[target] = value
     if account is not None and isinstance(account.get('address'), dict):
         payload.pop(field_map.get('street', 'street'), None)
@@ -66,7 +70,18 @@ def patch_action(account, payload, guard_parent=False):
     return {'method':'PATCH', 'account_id':str(account['id']), 'payload':payload, 'before':account, 'guard_parent':guard_parent}
 
 def changes(account, payload):
-    return {k:v for k,v in payload.items() if account.get(k) != v and not (k == 'care_offerings' and isinstance(account.get(k), list) and sorted(account[k]) == sorted(v))}
+    def equivalent(key, value):
+        old = account.get(key)
+        if old == value:
+            return True
+        if key in ('billing_street','street') and old:
+            return street_key(old) == street_key(value)
+        if key in ('billing_city','billing_state','city','state'):
+            return normalize(old) == normalize(value)
+        if key == 'care_offerings' and isinstance(old,list):
+            return sorted(old) == sorted(value)
+        return False
+    return {k:v for k,v in payload.items() if not equivalent(k,v)}
 
 def reconcile(conn, snapshot, accounts, parent):
     parent_id = str(parent['id'])
@@ -83,6 +98,9 @@ def reconcile(conn, snapshot, accounts, parent):
         semantic = {'kind':kind, 'location':location.get('source_url') if location else None,
                     'actions':[{k:v for k,v in a.items() if k not in ('before', 'guard_parent')} for a in actions]}
         fingerprint = digest(semantic)
+        for action in actions:
+            if action['method'] == 'POST':
+                action['payload']['note'] += f'\nReconciliation operation: {fingerprint}'
         conn.execute('INSERT OR IGNORE INTO proposals(fingerprint,run_id,title,kind,plan,evidence) VALUES(?,?,?,?,?,?)', (fingerprint,run_id,title,kind,json.dumps(actions),json.dumps(evidence)))
         proposed.append(fingerprint)
 
@@ -100,7 +118,7 @@ def reconcile(conn, snapshot, accounts, parent):
         ambiguous = best_score < 88 or address_counts[address_key] > 1 or any(c[1] in used for c in strong or candidates[:1])
         # Duplicate claims require precise address identity and sufficiently
         # similar names; same-address businesses are otherwise left for review.
-        if len(strong) > 1 and any(SequenceMatcher(None,normalize(c[2].get('name')),normalize(loc['name'])).ratio() < .55 for c in strong):
+        if len(strong) > 1 and len({normalize(c[2].get('care_type')) for c in strong}) > 1:
             ambiguous = True
         if not strong and len(candidates) > 1 and candidates[0][0]-candidates[1][0] < 8:
             ambiguous = True
